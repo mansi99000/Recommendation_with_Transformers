@@ -12,6 +12,8 @@ from torchtext.vocab import vocab
 from torch.utils.data import DataLoader, Dataset
 from torch.nn.utils.rnn import pad_sequence
 from sklearn.metrics import ndcg_score
+from sklearn.model_selection import train_test_split
+
 
 
 from collections import Counter
@@ -122,16 +124,31 @@ ratings_data_transformed.rename(
 )
 
 
-# Random indexing
-random_selection = np.random.rand(len(ratings_data_transformed.index)) <= 0.85
+# # Random indexing
+# random_selection = np.random.rand(len(ratings_data_transformed.index)) <= 0.85
 
-# Split train data
-df_train_data = ratings_data_transformed[random_selection]
-train_data_raw = df_train_data[["user_id", "sequence_movie_ids"]].values
+# # Split train data
+# df_train_data = ratings_data_transformed[random_selection]
+# train_data_raw = df_train_data[["user_id", "sequence_movie_ids"]].values
 
-# Split test data
-df_test_data = ratings_data_transformed[~random_selection]
-test_data_raw = df_test_data[["user_id", "sequence_movie_ids"]].values
+# # Split test data
+# df_test_data = ratings_data_transformed[~random_selection]
+# test_data_raw = df_test_data[["user_id", "sequence_movie_ids"]].values
+
+# Start with the full dataset
+data = ratings_data_transformed[["user_id", "sequence_movie_ids"]].values
+
+# Step 1: Split into 60% train and 40% (temp)
+train_data, temp_data = train_test_split(data, test_size=0.4, random_state=42)
+
+# Step 2: Split the remaining 40% into 20% validation and 20% test
+val_data, test_data = train_test_split(temp_data, test_size=0.5, random_state=42)
+
+# Print the sizes to confirm the split
+print(f"Train size: {len(train_data)}")
+print(f"Validation size: {len(val_data)}")
+print(f"Test size: {len(test_data)}")
+
 
 # Pytorch Dataset for user interactions
 class MovieSeqDataset(Dataset):
@@ -163,13 +180,16 @@ def collate_batch(batch):
 
 BATCH_SIZE = 256
 # Create instances of your Dataset for each set
-train_dataset = MovieSeqDataset(train_data_raw, movie_vocab_stoi, user_vocab_stoi)
-val_dataset = MovieSeqDataset(test_data_raw, movie_vocab_stoi, user_vocab_stoi)
+train_dataset = MovieSeqDataset(train_data, movie_vocab_stoi, user_vocab_stoi)
+val_dataset = MovieSeqDataset(val_data, movie_vocab_stoi, user_vocab_stoi)
+test_dataset = MovieSeqDataset(test_data, movie_vocab_stoi, user_vocab_stoi)
+
 # Create DataLoaders
 train_iter = DataLoader(train_dataset, batch_size=BATCH_SIZE,
                         shuffle=True, collate_fn=collate_batch)
 val_iter = DataLoader(val_dataset, batch_size=BATCH_SIZE,
                       shuffle=False, collate_fn=collate_batch)
+test_iter = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_batch)
 
 
 class PositionalEncoding(nn.Module):
@@ -349,6 +369,9 @@ with TemporaryDirectory() as tempdir:
         # Evaluation
         val_loss = evaluate(model, val_iter)
 
+        test_loss = evaluate(model, test_iter)
+
+
         # Compute the perplexity of the validation loss
         val_ppl = math.exp(val_loss)
         elapsed = time.time() - epoch_start_time
@@ -365,8 +388,37 @@ with TemporaryDirectory() as tempdir:
             torch.save(model.state_dict(), best_model_params_path)
 
         scheduler.step()
-    model.load_state_dict(torch.load(best_model_params_path)) # load best model states
+    # model.load_state_dict(torch.load(best_model_params_path)) # load best model states
+    # test_loss = evaluate(model, test_iter)
+    # print(f'Final Test loss: {test_loss:.4f}')
+    # print(f'Final Test perplexity: {math.exp(test_loss):.2f}')
 
+    # Combine train and validation data for final training
+    final_train_data = np.concatenate([train_data, val_data], axis=0)  # Combine train and validation data
+    final_train_dataset = MovieSeqDataset(final_train_data, movie_vocab_stoi, user_vocab_stoi)
+    final_train_iter = DataLoader(final_train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_batch)
+
+    print("\nStarting final training on combined train+validation set...")
+    final_epochs = 5  # Set the number of additional epochs for final training
+
+    for epoch in range(1, final_epochs + 1):
+        epoch_start_time = time.time()
+        train(model, final_train_iter, epoch)
+        elapsed = time.time() - epoch_start_time
+        print(f"| Final Training Epoch {epoch} completed in {elapsed:.2f}s |")
+
+    # Save final model parameters after training on train+validation
+    final_model_params_path = os.path.join(tempdir, "final_model_params.pt")
+    torch.save(model.state_dict(), final_model_params_path)
+
+    # Load final model parameters
+    model.load_state_dict(torch.load(final_model_params_path))
+
+    # Evaluate on the test set
+    print("\nEvaluating the final model on the test set...")
+    final_test_loss = evaluate(model, test_iter)
+    print(f"Final Test Loss (after train+val training): {final_test_loss:.4f}")
+    print(f"Final Test Perplexity (after train+val training): {math.exp(final_test_loss):.2f}")
 
 def get_popular_movies(df_ratings):
   # Calculate the number of ratings for each movie
