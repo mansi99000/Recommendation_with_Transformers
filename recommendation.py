@@ -11,6 +11,8 @@ from torch.utils.data import dataset
 from torchtext.vocab import vocab
 from torch.utils.data import DataLoader, Dataset
 from torch.nn.utils.rnn import pad_sequence
+from sklearn.metrics import ndcg_score
+
 
 from collections import Counter
 
@@ -433,3 +435,52 @@ for i, (movie_data, user_data) in enumerate(val_iter):
 
         transformer_reco_results.append(transformer_reco_result)
         popular_reco_results.append(popular_reco_result)
+
+
+# Since we have already sorted our recommendations
+# An array that represent our recommendation scores is used.
+representative_array = [[i for i in range(k, 0, -1)]] * len(transformer_reco_results)
+
+# Placeholder for precision results
+transformer_precision_results = []
+popular_precision_results = []
+
+# for k in [3, 5, 10]:
+#     transformer_result = ndcg_score(transformer_reco_results,
+#                                     representative_array, k=k)
+#     popular_result = ndcg_score(popular_reco_results,
+#                                 representative_array, k=k)
+    
+
+  
+# print(f"Transformer NDCG result at top {k}: {round(transformer_result, 4)}")
+# print(f"Popular recommendation NDCG result at top {k}: {round(popular_result, 4)}\n\n")
+
+for k in [3, 5, 10]:
+    # Calculate NDCG
+    transformer_result = ndcg_score(transformer_reco_results,
+                                    representative_array, k=k)
+    popular_result = ndcg_score(popular_reco_results,
+                                representative_array, k=k)
+
+    # Calculate Precision@K for Transformer and Popular recommendations
+    transformer_precision = []
+    popular_precision = []
+
+    for transformer_reco, popular_reco in zip(transformer_reco_results, popular_reco_results):
+        # Calculate Precision for Transformer
+        transformer_precision_at_k = np.sum(transformer_reco[:k]) / k
+        transformer_precision.append(transformer_precision_at_k)
+
+        # Calculate Precision for Popular
+        popular_precision_at_k = np.sum(popular_reco[:k]) / k
+        popular_precision.append(popular_precision_at_k)
+
+    # Average Precision@K across all samples
+    transformer_precision_avg = np.mean(transformer_precision)
+    popular_precision_avg = np.mean(popular_precision)
+
+    print(f"Transformer NDCG result at top {k}: {round(transformer_result, 4)}")
+    print(f"Popular recommendation NDCG result at top {k}: {round(popular_result, 4)}")
+    print(f"Transformer Precision@{k}: {round(transformer_precision_avg, 4)}")
+    print(f"Popular Precision@{k}: {round(popular_precision_avg, 4)}\n\n")
