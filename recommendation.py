@@ -52,20 +52,6 @@ ratings["movie_id"] = ratings["movie_id"].apply(lambda x: f"movie_{x}")
 ratings["user_id"] = ratings["user_id"].apply(lambda x: f"user_{x}")
 
 
-# Creating vocabulary
-
-# The file moveis.dat contains some duplicate movie rows so we need to extract all uniqur movie ids.
-
-# The Counter class from Python's collections module creates a frequency distribution for items in an iterable.
-#   Even though in this case each movie_id is unique and will have a count of 1, 
-#   Counter is still a convenient and compatible way to provide input to the vocab function from torchtext.
-
-# Although unique() gives a list of unique movie IDs, it does not include the frequency information required by vocab. 
-#   The Counter bridges this gap, even if all frequencies are 1.
-
-
-#TODO Understand the purpose of all of this. Why are we doing this? Why do we need vocaba nd avocab_stoi - they work similary. 
-# What does it mean to create a vocabulary?
 movie_ids = movies.movie_id.unique() # Genarting a list of unique movie ids
 movie_counter = Counter(movie_ids) # Counter is used to feed movies to movive_vocab
 movie_vocab = vocab(movie_counter, specials=['<unk>']) # Genarting vocabulary - The vocab object maps each unique movie ID to a numerical index.
@@ -122,18 +108,6 @@ ratings_data_transformed.rename(
     columns={"movie_ids": "sequence_movie_ids"},
     inplace=True,
 )
-
-
-# # Random indexing
-# random_selection = np.random.rand(len(ratings_data_transformed.index)) <= 0.85
-
-# # Split train data
-# df_train_data = ratings_data_transformed[random_selection]
-# train_data_raw = df_train_data[["user_id", "sequence_movie_ids"]].values
-
-# # Split test data
-# df_test_data = ratings_data_transformed[~random_selection]
-# test_data_raw = df_test_data[["user_id", "sequence_movie_ids"]].values
 
 # Start with the full dataset
 data = ratings_data_transformed[["user_id", "sequence_movie_ids"]].values
