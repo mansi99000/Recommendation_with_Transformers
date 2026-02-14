@@ -20,183 +20,23 @@ Usage:
 import time
 import math
 import os
-from collections import Counter
 from datetime import datetime
 
 import torch
-from torch import nn, Tensor
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch.utils.data import DataLoader, Dataset
-from torch.nn.utils.rnn import pad_sequence
-from sklearn.model_selection import train_test_split
-from zipfile import ZipFile
-from urllib.request import urlretrieve
+from torch import nn
+from torch.utils.data import DataLoader
 
 import pandas as pd
 import numpy as np
 
-
-# ============================================================
-# Shared Components (same as recommendation.py)
-# ============================================================
-
-class SimpleVocab:
-    """Lightweight replacement for torchtext.vocab.vocab (deprecated)."""
-    def __init__(self, counter, specials=None):
-        specials = specials or []
-        self.itos = list(specials) + [tok for tok, _ in counter.most_common() if tok not in specials]
-        self.stoi = {tok: idx for idx, tok in enumerate(self.itos)}
-
-    def get_stoi(self):
-        return self.stoi
-
-    def get_itos(self):
-        return self.itos
-
-    def __len__(self):
-        return len(self.itos)
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(1, max_len, d_model)
-        pe[0, :, 0::2] = torch.sin(position * div_term)
-        pe[0, :, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = x + self.pe[:, :x.size(1)]
-        return self.dropout(x)
-
-
-class TransformerModel(nn.Module):
-    def __init__(self, ntoken, nuser, d_model, nhead, d_hid, nlayers, dropout=0.5):
-        super().__init__()
-        self.pos_encoder = PositionalEncoding(d_model, dropout)
-        encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True)
-        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        self.movie_embedding = nn.Embedding(ntoken, d_model)
-        self.user_embedding = nn.Embedding(nuser, d_model)
-        self.d_model = d_model
-        self.linear = nn.Linear(2 * d_model, ntoken)
-        self.init_weights()
-
-    def init_weights(self):
-        initrange = 0.1
-        self.movie_embedding.weight.data.uniform_(-initrange, initrange)
-        self.user_embedding.weight.data.uniform_(-initrange, initrange)
-        self.linear.bias.data.zero_()
-        self.linear.weight.data.uniform_(-initrange, initrange)
-
-    @staticmethod
-    def generate_square_subsequent_mask(sz):
-        return torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
-
-    def forward(self, src, user, src_mask=None):
-        seq_len = src.size(1)
-        if src_mask is None:
-            src_mask = self.generate_square_subsequent_mask(seq_len).to(src.device)
-        movie_embed = self.movie_embedding(src) * math.sqrt(self.d_model)
-        user_embed = self.user_embedding(user) * math.sqrt(self.d_model)
-        movie_embed = self.pos_encoder(movie_embed)
-        output = self.transformer_encoder(movie_embed, src_mask)
-        user_embed = user_embed.expand(-1, output.size(1), -1)
-        output = torch.cat((output, user_embed), dim=-1)
-        output = self.linear(output)
-        return output
-
-
-class MovieSeqDataset(Dataset):
-    def __init__(self, data, movie_vocab_stoi, user_vocab_stoi):
-        self.data = data
-        self.movie_vocab_stoi = movie_vocab_stoi
-        self.user_vocab_stoi = user_vocab_stoi
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        user, movie_sequence = self.data[idx]
-        movie_data = [self.movie_vocab_stoi[item] for item in movie_sequence]
-        user_data = self.user_vocab_stoi[user]
-        return torch.tensor(movie_data), torch.tensor(user_data)
-
-
-# ============================================================
-# Data Loading
-# ============================================================
-
-def load_data():
-    """Load and preprocess MovieLens 1M dataset."""
-    if not os.path.exists("ml-1m"):
-        urlretrieve("http://files.grouplens.org/datasets/movielens/ml-1m.zip", "movielens.zip")
-        ZipFile("movielens.zip", "r").extractall()
-
-    users = pd.read_csv("ml-1m/users.dat", sep="::",
-                         names=["user_id", "sex", "age_group", "occupation", "zip_code"],
-                         engine="python")
-    ratings = pd.read_csv("ml-1m/ratings.dat", sep="::",
-                           names=["user_id", "movie_id", "rating", "unix_timestamp"],
-                           engine="python")
-    movies = pd.read_csv("ml-1m/movies.dat", sep="::",
-                          names=["movie_id", "title", "genres"],
-                          encoding='latin-1', engine="python")
-
-    users["user_id"] = users["user_id"].apply(lambda x: f"user_{x}")
-    movies["movie_id"] = movies["movie_id"].apply(lambda x: f"movie_{x}")
-    ratings["movie_id"] = ratings["movie_id"].apply(lambda x: f"movie_{x}")
-    ratings["user_id"] = ratings["user_id"].apply(lambda x: f"user_{x}")
-
-    movie_ids = movies.movie_id.unique()
-    movie_counter = Counter(movie_ids)
-    movie_vocab = SimpleVocab(movie_counter, specials=['<unk>'])
-    movie_vocab_stoi = movie_vocab.get_stoi()
-
-    user_ids = users.user_id.unique()
-    user_counter = Counter(user_ids)
-    user_vocab = SimpleVocab(user_counter, specials=['<unk>'])
-    user_vocab_stoi = user_vocab.get_stoi()
-
-    ratings_group = ratings.sort_values(by=["unix_timestamp"]).groupby("user_id")
-    ratings_data = pd.DataFrame(data={
-        "user_id": list(ratings_group.groups.keys()),
-        "movie_ids": list(ratings_group.movie_id.apply(list)),
-        "timestamps": list(ratings_group.unix_timestamp.apply(list)),
-    })
-
-    return ratings_data, movie_vocab, movie_vocab_stoi, user_vocab, user_vocab_stoi
-
-
-def create_sequences(values, window_size, step_size, min_history=1):
-    """Create sliding-window sequences from a list of movie IDs."""
-    sequences = []
-    start_index = 0
-    while len(values[start_index:]) > min_history:
-        seq = values[start_index : start_index + window_size]
-        sequences.append(seq)
-        start_index += step_size
-    return sequences
-
-
-def prepare_splits(ratings_data, seq_length, step_size=2):
-    """Create sequences and split into train/val/test."""
-    rd = ratings_data.copy()
-    rd.movie_ids = rd.movie_ids.apply(
-        lambda ids: create_sequences(ids, seq_length, step_size, min_history=1)
-    )
-    if "timestamps" in rd.columns:
-        del rd["timestamps"]
-    rd = rd[["user_id", "movie_ids"]].explode("movie_ids", ignore_index=True)
-    rd.rename(columns={"movie_ids": "sequence_movie_ids"}, inplace=True)
-
-    data = rd[["user_id", "sequence_movie_ids"]].values
-    train_data, temp_data = train_test_split(data, test_size=0.4, random_state=42)
-    val_data, test_data = train_test_split(temp_data, test_size=0.5, random_state=42)
-    return train_data, val_data, test_data
+# Import model and shared data utilities — single source of truth
+from transformer import TransformerModel
+from data_utils import (
+    load_movielens_data,
+    prepare_splits,
+    MovieSeqDataset,
+    make_collate_fn,
+)
 
 
 # ============================================================
@@ -286,12 +126,7 @@ def evaluate_hit_rate(model, eval_iter, ntokens, device, k=10):
 def run_config(config, train_data, val_data, movie_vocab_stoi, user_vocab_stoi,
                ntokens, nusers, device, ablation_epochs=3, batch_size=256):
     """Train a model with the given config and return metrics."""
-    unk_idx = movie_vocab_stoi['<unk>']
-
-    def collate_fn(batch):
-        movies = [item[0] for item in batch]
-        users = [item[1] for item in batch]
-        return pad_sequence(movies, padding_value=unk_idx, batch_first=True), torch.stack(users)
+    collate_fn = make_collate_fn(movie_vocab_stoi['<unk>'])
 
     train_dataset = MovieSeqDataset(train_data, movie_vocab_stoi, user_vocab_stoi)
     val_dataset = MovieSeqDataset(val_data, movie_vocab_stoi, user_vocab_stoi)
@@ -338,7 +173,13 @@ if __name__ == "__main__":
 
     # --- Load data ---
     print("\nLoading MovieLens 1M dataset...")
-    ratings_data_raw, movie_vocab, movie_vocab_stoi, user_vocab, user_vocab_stoi = load_data()
+    ml_data = load_movielens_data()
+    movie_vocab = ml_data["movie_vocab"]
+    movie_vocab_stoi = ml_data["movie_vocab_stoi"]
+    user_vocab = ml_data["user_vocab"]
+    user_vocab_stoi = ml_data["user_vocab_stoi"]
+    ratings_data_raw = ml_data["ratings_data"]
+
     ntokens = len(movie_vocab)
     nusers = len(user_vocab)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

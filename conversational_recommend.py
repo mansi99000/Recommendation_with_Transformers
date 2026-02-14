@@ -14,60 +14,24 @@ Usage:
 import os
 import sys
 import argparse
-from collections import Counter
 
 import torch
-import pandas as pd
 
-# Same vocab and model as main pipeline
+# Same vocab and model as main pipeline — single source of truth
 from transformer import TransformerModel
+from data_utils import load_movielens_data
 
 # -----------------------------------------------------------------------------
 # Data loading (must match recommendation.py so vocabs align with checkpoint)
 # -----------------------------------------------------------------------------
 
 def load_vocab_and_titles():
-    """Load MovieLens 1M and build vocab + movie_id -> title mapping."""
-    if not os.path.exists("ml-1m"):
-        print("Run from project root. ml-1m/ not found.")
-        sys.exit(1)
+    """Load MovieLens 1M and build vocab + movie_id -> title mapping.
 
-    movies = pd.read_csv(
-        "ml-1m/movies.dat", sep="::", names=["movie_id", "title", "genres"],
-        encoding="latin-1", engine="python",
-    )
-    users = pd.read_csv(
-        "ml-1m/users.dat", sep="::",
-        names=["user_id", "sex", "age_group", "occupation", "zip_code"],
-        engine="python",
-    )
-
-    movies["movie_id"] = movies["movie_id"].apply(lambda x: f"movie_{x}")
-    users["user_id"] = users["user_id"].apply(lambda x: f"user_{x}")
-
-    class SimpleVocab:
-        def __init__(self, counter, specials=None):
-            specials = specials or []
-            self.itos = list(specials) + [t for t, _ in counter.most_common() if t not in specials]
-            self.stoi = {t: i for i, t in enumerate(self.itos)}
-
-        def get_itos(self):
-            return self.itos
-
-        def get_stoi(self):
-            return self.stoi
-
-        def __len__(self):
-            return len(self.itos)
-
-    movie_counter = Counter(movies.movie_id.unique())
-    user_counter = Counter(users.user_id.unique())
-    movie_vocab = SimpleVocab(movie_counter, specials=["<unk>"])
-    user_vocab = SimpleVocab(user_counter, specials=["<unk>"])
-
-    movie_title_dict = dict(zip(movies.movie_id, movies.title))
-
-    return movie_vocab, user_vocab, movie_title_dict
+    Downloads the dataset automatically if not already present.
+    """
+    data = load_movielens_data()
+    return data["movie_vocab"], data["user_vocab"], data["movie_title_dict"]
 
 
 # -----------------------------------------------------------------------------

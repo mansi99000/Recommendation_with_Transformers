@@ -10,4 +10,5 @@ checkpoints/*.pt
 # IDE
 .idea/
 .vscode/
+.claude/
 *.swp
